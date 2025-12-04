@@ -157,7 +157,6 @@ def main(
     do_cache = cache and phenosummary_output != sys.stdout and file_exists(phenosummary_output)
     detected_phenos = None
     files = {}
-    fval = lambda x: "\036".join(sorted(x.columns))
     if do_cache:
         detected_phenos = []
         if gcta_dest is not None:
@@ -257,12 +256,20 @@ def main(
 
     if phenotable_output is None and gcta_dest is not None:
         return
-    
-    df = df.drop(columns=haserr.index[haserr], errors="ignore")
 
-    df.columns = pd.MultiIndex.from_arrays([df.columns, gtable["type"].loc[df.columns].map({
+    phenos: Iterable[pd.DataFrame] = [
+        df.columns.to_series().rename("column"),
+        df.columns.to_series().map(lambda x: x.split("$")[0]).rename("pheno")
+    ]
+    phenos = pd.concat(phenos, axis=1)
+    
+    df = df.drop(columns=phenos.loc[phenos["pheno"].isin(haserr.index[haserr]), "column"], errors="ignore")
+    phenos = phenos.loc[df.columns]
+
+    df.columns = pd.MultiIndex.from_arrays([df.columns, phenos.merge(gtable["type"], left_on="pheno", right_index=True, how="left")["type"].map({
         "case-control": "B",
-        "regression": "P"
+        "regression": "P",
+        "transform": "!"
     })])
     out_df = out_df.join(df)
     out_df.index.name = ("sample", "0")
@@ -288,6 +295,9 @@ def main(
             else:
                 save_df = out_df
             save_df = save_df.reset_index()
+            if (save_df.columns.get_level_values(1) == "!").sum() > 0:
+                print("WARNING: excluding some phenotypes that have the 'transform' type which is not supported in SNPTest output")
+            save_df = save_df.loc[:, save_df.columns.get_level_values(1) != "!"]
             save_df.to_csv(phenotable_output, float_format="{:.6g}".format, sep=" ", na_rep="NA", index=False, quoting=3)
         # Avoid errors due to piping into commands that do not read the output entirely (i.e., head)
         except BrokenPipeError:
@@ -300,20 +310,20 @@ def main(
         out_df.index = pd.MultiIndex.from_arrays([out_df.index.map(famids), out_df.index], names=["famid", "sample"])
         dfdt = out_df.columns.get_level_values(1)
         out_df = out_df.droplevel(1, axis=1)
-
-        phenos = out_df.columns[dfdt.isin(["B", "P"])]
-        for pheno in phenos:
+        
+        for pheno, pheno_cols in phenos.groupby("pheno")["column"]:
             if haserr.loc[pheno]:
                 continue
             #dest = lambda x: gcta_dest + ("." if not Path(gcta_dest).is_dir() else "") + pheno + "." + x
             dest = lambda x: gcta_dest + ("." if not gcta_dest.endswith("/") or gcta_dest.endswith(".") else "") + pheno + "." + x
-            # Only binary phenotypes are saved to the .phen file
-            phen = out_df[[pheno]].fillna(-9)
+            phen = out_df[pheno_cols.values].fillna(-9)
             
             fd_phen, fv_phen = gcta_tsv_and_hash(phen)
             dest_phen = dest("phen")
             
             if use_links and fv_phen in files:
+                if file_exists(dest_phen):
+                    os.remove(dest_phen)
                 os.symlink(Path(files[fv_phen]).name, dest_phen)
             else:
                 if use_links:
@@ -334,6 +344,8 @@ def main(
                 fd_covar, fv_covar = gcta_tsv_and_hash(covar)
                 dest_covar = dest("covar")
                 if use_links and fv_covar in files:
+                    if file_exists(dest_covar):
+                        os.remove(dest_covar)
                     os.symlink(Path(files[fv_covar]).name, dest_covar)
                 else:
                     if use_links:
@@ -351,6 +363,8 @@ def main(
                 fd_qcovar, fv_qcovar = gcta_tsv_and_hash(qcovar)
                 dest_qcovar = dest("qcovar")
                 if use_links and fv_qcovar in files:
+                    if file_exists(dest_qcovar):
+                        os.remove(dest_qcovar)
                     os.symlink(Path(files[fv_qcovar]).name, dest_qcovar)
                 else:
                     if use_links:
@@ -511,9 +525,9 @@ def report_counts(target, name, stepname, ccdata, pass_filter):
     """
     if ccdata is not None:
         #set_or_append_count(target, (name, f"values_{stepname}"), (pass_filter & (ccdata["cases"] | ccdata["controls"])).sum())
-        if"cases" in ccdata and ccdata["cases"] is not None:
+        if "cases" in ccdata and ccdata["cases"] is not None:
             set_or_append_count(target, (name, f"cases:{stepname}"), int((pass_filter & ccdata["cases"]).sum()))
-        if"controls" in ccdata and ccdata["controls"] is not None:
+        if "controls" in ccdata and ccdata["controls"] is not None:
             set_or_append_count(target, (name, f"controls:{stepname}"), int((pass_filter & ccdata["controls"]).sum()))
     #else:
     #    set_or_append_count(target, (name, f"values_{stepname}"), pass_filter.sum())
@@ -758,6 +772,17 @@ def make_phenotable(table_paths, guidetable_path, samples=None, subset=None, map
                 ser = ser.mask((~filtered) | ~np.isfinite(ser))
                 ns_at_step[(name, "values")] = (~ser.isna()).sum()
                 cols.append(ser.rename(name))
+        elif entry["type"] == "transform":
+            err, sers = evalcrit(entry["transform"], aeval, df.index, allow_multiple=True)
+            addmsg(errors, (name, "transform"), err)
+            if sers is not None:
+                addmsg(errors, (name, "transform"), nawarn(ser, filtered, critname="transform"))
+                ser_nas = []
+                for i, ser in enumerate(sers):
+                    if isinstance(ser, pd.Series):
+                        ser_nas.append((~ser.isna()).sum())
+                        cols.append(ser.rename(name + f"${i}"))
+                ns_at_step[(name, "values")] = ",".join(f"{s:.0f}" for s in ser_nas)
         else:
             addmsg(errors, (name, "general"), f"ERROR: unknown type '{entry['type']}'; expected either 'case-control' or 'regression'")
         

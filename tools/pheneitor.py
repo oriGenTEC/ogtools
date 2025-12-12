@@ -226,7 +226,7 @@ def main(
 
     # All covars must be in the --input data frame, otherwise the program exits with code 1
     # (aliases are allowed, see make_phenotable)
-    inccovars = pd.Index(gtable.loc[~haserr, "covars"].str.split("\s*,\s*").explode().unique()).dropna().to_series().isin(set(data.columns) | set(aliases.keys()))
+    inccovars = pd.Index(gtable.loc[~haserr, "covars"].str.split(r"\s*,\s*").explode().unique()).dropna().to_series().isin(set(data.columns) | set(aliases.keys()))
 
     if not inccovars.all():
         print(
@@ -254,7 +254,7 @@ def main(
     covars.columns = pd.MultiIndex.from_arrays([covars.columns, covartypes])
     out_df = covars
 
-    if phenotable_output is None and gcta_dest is not None:
+    if phenotable_output is None and gcta_dest is None:
         return
 
     phenos: Iterable[pd.DataFrame] = [
@@ -296,7 +296,7 @@ def main(
                 save_df = out_df
             save_df = save_df.reset_index()
             if (save_df.columns.get_level_values(1) == "!").sum() > 0:
-                print("WARNING: excluding some phenotypes that have the 'transform' type which is not supported in SNPTest output")
+                print("WARNING: excluding some phenotypes that have the 'transform' type which is not supported in SNPTest output", file=sys.stderr)
             save_df = save_df.loc[:, save_df.columns.get_level_values(1) != "!"]
             save_df.to_csv(phenotable_output, float_format="{:.6g}".format, sep=" ", na_rep="NA", index=False, quoting=3)
         # Avoid errors due to piping into commands that do not read the output entirely (i.e., head)
@@ -335,7 +335,10 @@ def main(
                 except BrokenPipeError:
                     pass
                 
-            pheno_covars = [(x[2:] if x.startswith("!#") else aliases.get(x, x)).strip() for x in gtable.loc[pheno, "covars"].split(",")]
+            if hasvalue(gtable.loc[pheno, "covars"]):
+                pheno_covars = [(x[2:] if x.startswith("!#") else aliases.get(x, x)) for x in [y.strip() for y in gtable.loc[pheno, "covars"].split(",")]]
+            else:
+                pheno_covars = []
 
             # Only discrete covars are saved to the .covar file
             covar = out_df.loc[:, (dfdt == "D") & (out_df.columns.isin(pheno_covars))].astype(pd.StringDtype()).fillna("-9") # TODO: is -9 a valid NA here?
@@ -572,6 +575,9 @@ def make_phenotable(table_paths, guidetable_path, samples=None, subset=None, map
 
         # This avoids a "KeyError: DataType(null)" with df.convert_dtypes() later on
         table = table.loc[:, ~table.isna().all()]
+
+        if not samples is None and not bool(set(table.index) & set(samples)):
+            print(f"WARN: no (useful) samples found in {table_path}", file=sys.stderr)
 
         # If a field is declared more than once in different tables, the field declared in the
         # leftmost table of table_paths takes precedence

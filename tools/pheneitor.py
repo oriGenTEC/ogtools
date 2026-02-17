@@ -315,11 +315,10 @@ def main(
         out_df.index = pd.MultiIndex.from_arrays([out_df.index.map(famids), out_df.index], names=["famid", "sample"])
         dfdt = out_df.columns.get_level_values(1)
         out_df = out_df.droplevel(1, axis=1)
-        for pheno in summary_df.index:
+        for pheno in errors.index:
             pheno_cols = phenos.loc[phenos["pheno"] == pheno, "column"]
             dest = lambda x: gcta_dest + ("." if not gcta_dest.endswith("/") or gcta_dest.endswith(".") else "") + pheno + "." + x
             if indiv_summaries:
-                print("SAVING TO " + dest("summary"), file=sys.stderr)
                 summary_df.loc[pheno].map(lambda x: x.replace("\n", "\\n").replace("\t", "\\t") if isinstance(x, str) else x).to_csv(dest("summary"), sep="\t", header=False)
             
             if haserr.loc[pheno]:

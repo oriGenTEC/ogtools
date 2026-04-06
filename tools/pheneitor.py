@@ -1168,6 +1168,91 @@ def symtable(df, aliases):
             return out
         return data.rank(pct=True)
     
+    def fill_true(data):
+        """
+        Replaces NAs in the series with the value True.
+
+        Parameters:
+            data (Series): Data for removing NAs.
+
+        Returns:
+            Series: The series but without NAs.
+        """
+        return data.fillna(True).astype(np.bool_)
+    
+    def fill_false(data):
+        """
+        Replaces NAs in the series with the value False.
+
+        Parameters:
+            data (Series): Data for removing NAs.
+
+        Returns:
+            Series: The series but without NAs.
+        """
+        return data.fillna(False).astype(bool)
+    
+    def fill0(data):
+        """
+        Replaces NAs in the series with the value 0.
+
+        Parameters:
+            data (Series): Data for removing NAs.
+
+        Returns:
+            Series: The series but without NAs.
+        """
+        if pd.api.types.is_bool_dtype(data.dtype):
+            return data.fillna(False).astype(int)
+        elif pd.api.types.is_integer_dtype(data.dtype):
+            return data.fillna(0).astype(int)
+        else:
+            return data.fillna(0).astype(float)
+    
+    def fill1(data):
+        """
+        Replaces NAs in the series with the value 0.
+
+        Parameters:
+            data (Series): Data for removing NAs.
+
+        Returns:
+            Series: The series but without NAs.
+        """
+        if pd.api.types.is_bool_dtype(data.dtype):
+            return data.fillna(True).astype(int)
+        elif pd.api.types.is_integer_dtype(data.dtype):
+            return data.fillna(1).astype(int)
+        else:
+            return data.fillna(1).astype(float)
+
+    def shuffle(data, seed=None, shuffle_nas=False):
+        """
+        Shuffles the labels in the series.
+
+        Parameters:
+            data (Series): Data for shuffling.
+            seed (int): Seed for RNG.
+            shuffle_nas (bool): Whether to also shuffle NAs.
+
+        Returns:
+            Series: The series but without NAs.
+        """
+        if seed is None:
+            rng = np.random
+        else:
+            rng = np.random.default_rng(seed=seed)
+        
+        if shuffle_nas:
+            included_data = data
+        else:
+            included_data = data.dropna()
+        rng.shuffle(included_data.index)
+        idxs = list(included_data.index)
+        np.random.shuffle(idxs)
+        included_data.index = idxs
+        return included_data.reindex(data.index).convert_dtypes()
+
     def get_notes(note_column, column):
         # TODO: Document
         cfs = column.split(".")
@@ -1223,11 +1308,19 @@ def symtable(df, aliases):
         "isreal": np.isfinite,
         "max": np.maximum,
         "min": np.minimum,
+        "abs": np.abs,
         "zscore": zscore,
         "norm": norm,
         "quantile": quantile,
         "rnd": rnd,
         "randomcol": randomcol,
+        "shuffle": shuffle,
+        "fill0": fill0,
+        "fill1": fill1,
+        "fill_true": fill_true,
+        "fill_false": fill_false,
+        "fillT": fill_true,
+        "fillF": fill_false,
         "bins": bins,
         "interp": interp,
         "ifelse": ifelse,
